@@ -6,6 +6,7 @@ __credits__ = ["Andrea PIERRÉ"]
 import math
 import sys
 from typing import Optional
+import random   # BM: needed to subsample goal space
 
 import numpy as np
 
@@ -153,7 +154,7 @@ class LunarLander(gym.Env, EzPickle):
 
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": FPS}
 
-    def __init__(self, continuous: bool = False, fuel_penalty: bool = True, task: str = 'land', randomize_helipad: bool = False, spec = None):
+    def __init__(self, continuous: bool = False, fuel_penalty: bool = True, task: str = 'land', randomize_helipad: bool = False, spec = None, N=10):
         EzPickle.__init__(self)
         self.screen = None
         self.isopen = True
@@ -161,6 +162,8 @@ class LunarLander(gym.Env, EzPickle):
         self.moon = None
         self.lander = None
         self.particles = []
+        self.sky_polys = []  # BM: render_mode="human" causes crash w/o line
+        self.drawlist = []   # BM: render_mode="human" causes crash w/o line
 
         self.prev_reward = None
 
@@ -177,6 +180,10 @@ class LunarLander(gym.Env, EzPickle):
                                    False])
         # BM: used to determine if trial was succesful
         self.solved_reward = 200
+
+        # BM: randomly constrains the goal space to N goals
+        self._N = N
+        self.initialize_goal_space()
 
         _state_size = 8
         if task == 'reach':
@@ -206,6 +213,39 @@ class LunarLander(gym.Env, EzPickle):
         self.randomize_helipad = randomize_helipad
 
         self.spec = spec
+
+    def initialize_goal_space(self):
+        CHUNKS = 11
+        self._chunk_options = [_ for _ in range(1, CHUNKS-1)]
+        if self._N < len(self._chunk_options):
+            self._chunk_options = random.sample(self._chunk_options, self._N)
+
+    def insert_goals(self, goal_agnostic_obs):
+        """_summary_
+
+        Args:
+            goal_agnostic_obs (_type_): _description_
+        """        
+        GOAL_AGNOSTIC_OBS_DIM = 8
+        OBS_DIM = 9
+        CHUNKS = 11
+        W = 20
+
+        helipad_chunks = self._chunk_options
+
+
+        chunk_x = [W / (CHUNKS - 1) * i for i in range(CHUNKS)]
+        num_goals, goal_dim = len(helipad_chunks), 1
+        helipad_x1 = np.array(chunk_x)[np.array(self._chunk_options)-1]
+        helipad_x2 = np.array(chunk_x)[np.array(self._chunk_options)+1]
+        helipad_x = (helipad_x1 + helipad_x2) / 2
+        helipad_x = (helipad_x - VIEWPORT_W/SCALE/2) / (VIEWPORT_W/SCALE/2)
+
+        goal_agnostic_obs = goal_agnostic_obs.reshape(1, GOAL_AGNOSTIC_OBS_DIM)
+        goal_agnostic_obs = goal_agnostic_obs.repeat(num_goals, axis=0)
+
+        observations = np.hstack([goal_agnostic_obs, helipad_x.reshape(num_goals, goal_dim)])
+        return observations
 
     def _destroy(self):
         if not self.moon:
@@ -245,7 +285,7 @@ class LunarLander(gym.Env, EzPickle):
 
         # randomize helipad x coord
         if self.randomize_helipad:
-            helipad_chunk = self.np_random.choice(range(1, CHUNKS-1))
+            helipad_chunk = self.np_random.choice(self._chunk_options)
         else:
             helipad_chunk = CHUNKS // 2
 

@@ -8,11 +8,22 @@ def make_env(name, render_mode=None, N=0):
     if name.lower()=="cartpole":
         env = gym.make('CartPole-v1', render_mode=render_mode)
         return gymnasium.wrappers.TimeLimit(ContinuousCartPole(env), max_episode_steps=500)
-    if name.lower() == "lunarlander":
-        env = LunarLander(continuous=True, randomize_helipad=True, render_mode=render_mode)
+    if name.lower() == "lunar_lander":
+        if N==0:
+            N=10
+        env = LunarLander(continuous=True, randomize_helipad=True, N=N)
         # LunarLander is a gym environment and has a different API structure
         # it is necesary to wrap LunarLander for compatability
-        env = gymnasium.wrappers.EnvCompatibility(env)
+        # render_mode is a Gymnasium env kwarg
+        return env
+    if name.lower() == "lunarlander":
+        if N==0:
+            N=10
+        env = LunarLander(continuous=True, randomize_helipad=True, N=N)
+        # LunarLander is a gym environment and has a different API structure
+        # it is necesary to wrap LunarLander for compatability
+        # render_mode is a Gymnasium env kwarg
+        env = gymnasium.wrappers.EnvCompatibility(env, render_mode=render_mode)
         return env
     if name.lower() == "reacher":
         env = ReacherEnv(render_mode=render_mode)

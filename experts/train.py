@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 
 
-n_episodes = 1000
+n_episodes = 100_000
 max_episode_len = 1000
 reward_hist = []
 
@@ -24,10 +24,11 @@ reward_hist = []
 def train_expert(env, expert, output_path):
     for _ in tqdm.tqdm(range(1, n_episodes + 1)):
 
-        observation, info = env.reset()
+        observation, info = env.reset() 
         R = 0 # sum of episode rewards
         t = 0 # episode timestep
         while True:
+            breakpoint()
             action = expert.act(observation) #env.action_space.sample()
             observation, reward, done, terminated, info = env.step(action)
             R += reward
@@ -35,12 +36,12 @@ def train_expert(env, expert, output_path):
             reset = t == max_episode_len
 
             expert.observe(observation, reward, done, reset)
-            if done or reset:
+            if done or reset or terminated:
                 reward_hist.append(R)
                 break
 
         if _%100 == 1:
-            agent_name = output_path /( str(_) + "_reward_" + str(R))
+            agent_name = output_path / ( str(_) + "_reward_" + str(R))
             expert.save(agent_name)
             plt.figure()
             plt.plot(reward_hist)
@@ -104,4 +105,4 @@ if __name__ == "__main__":
                         env.action_space.high)
 
     train_expert(env, expert, Path(args.output_dir))
-    collect_trajectories(env, expert, Path(args.output_dir), args.rollouts)
+    collect_trajectories(env, expert, Path(args.output_dir), args.rollouts, args.solved_reward)
