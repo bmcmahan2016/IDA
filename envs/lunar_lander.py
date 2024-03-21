@@ -154,7 +154,7 @@ class LunarLander(gym.Env, EzPickle):
 
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": FPS}
 
-    def __init__(self, continuous: bool = False, fuel_penalty: bool = True, task: str = 'land', randomize_helipad: bool = False, spec = None, N=10):
+    def __init__(self, continuous: bool = False, fuel_penalty: bool = True, task: str = 'land', randomize_helipad: bool = False, spec = None, N=10, exploring_starts: bool = False):
         EzPickle.__init__(self)
         self.screen = None
         self.isopen = True
@@ -164,6 +164,7 @@ class LunarLander(gym.Env, EzPickle):
         self.particles = []
         self.sky_polys = []  # BM: render_mode="human" causes crash w/o line
         self.drawlist = []   # BM: render_mode="human" causes crash w/o line
+        self._exploring_starts = exploring_starts  # BM: added exploring starts for policy rollouts
 
         self.prev_reward = None
 
@@ -325,10 +326,21 @@ class LunarLander(gym.Env, EzPickle):
         self.moon.color1 = (0.0, 0.0, 0.0)
         self.moon.color2 = (0.0, 0.0, 0.0)
 
+
+        # BM: added exploring starts
+        initial_x = VIEWPORT_W / SCALE / 2 
         initial_y = VIEWPORT_H / SCALE
+        angle=0.0  # radians
+
+        if self._exploring_starts:
+            initial_x *= 3*np.random.rand()-1.5
+            initial_y *= 0.5*np.random.rand() + 0.5
+            angle = 2*np.random.rand()-1
+
+
         self.lander = self.world.CreateDynamicBody(
-            position=(VIEWPORT_W / SCALE / 2, initial_y),
-            angle=0.0,
+            position=(initial_x, initial_y),
+            angle=angle,
             fixtures=fixtureDef(
                 shape=polygonShape(
                     vertices=[(x / SCALE, y / SCALE) for x, y in LANDER_POLY]
@@ -350,11 +362,12 @@ class LunarLander(gym.Env, EzPickle):
             True,
         )
 
+        
         self.legs = []
         for i in [-1, +1]:
             leg = self.world.CreateDynamicBody(
-                position=(VIEWPORT_W / SCALE / 2 - i * LEG_AWAY / SCALE, initial_y),
-                angle=(i * 0.05),
+                position=(initial_x - i * LEG_AWAY / SCALE, initial_y),
+                angle=angle+(i * 0.05),
                 fixtures=fixtureDef(
                     shape=polygonShape(box=(LEG_W / SCALE, LEG_H / SCALE)),
                     density=1.0,

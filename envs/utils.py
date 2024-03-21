@@ -4,7 +4,7 @@ from envs.lunar_lander import LunarLander
 from envs.reacher import ReacherEnv
 import numpy as np
 
-def make_env(name, render_mode=None, N=0):
+def make_env(name, render_mode=None, N=0, exploring_starts=False):
     if name.lower()=="cartpole":
         env = gym.make('CartPole-v1', render_mode=render_mode)
         return gymnasium.wrappers.TimeLimit(ContinuousCartPole(env), max_episode_steps=500)
@@ -19,7 +19,7 @@ def make_env(name, render_mode=None, N=0):
     if name.lower() == "lunarlander":
         if N==0:
             N=10
-        env = LunarLander(continuous=True, randomize_helipad=True, N=N)
+        env = LunarLander(continuous=True, randomize_helipad=True, N=N, exploring_starts=exploring_starts)
         # LunarLander is a gym environment and has a different API structure
         # it is necesary to wrap LunarLander for compatability
         # render_mode is a Gymnasium env kwarg
