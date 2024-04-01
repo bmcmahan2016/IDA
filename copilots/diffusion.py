@@ -1,4 +1,6 @@
-
+'''
+code taken from https://github.com/dome272/Diffusion-Models-pytorch
+'''
 import torch
 
 class Diffusion:
