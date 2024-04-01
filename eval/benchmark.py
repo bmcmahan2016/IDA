@@ -6,6 +6,7 @@ human pilot, and intervention function in a Gymnasium environment
 
 '''
 from envs.utils import make_env
+from datetime import datetime
 import numpy as np  
 import tqdm
 import pygame
@@ -37,10 +38,11 @@ def test_IDA(agent, env, advantage_fn, gamma=0.2, num_episodes=100, render=False
         if render:
             rgb_frame = env.render()
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            video_writer = cv2.VideoWriter("debug" + ".mp4", fourcc, 24, (rgb_frame.shape[1], rgb_frame.shape[0]))
+            video_writer = cv2.VideoWriter(str(output_path) + "/" + str(datetime.now()) + "video.mp4", fourcc, 24, (rgb_frame.shape[1], rgb_frame.shape[0]))
         corr_vals = []
         exp_vals = []
         for _ in range(num_episodes):
+            corruption_on = False
             action_hist = []
             partial_state_hist = []
             observation, _ = env.reset()
@@ -54,12 +56,19 @@ def test_IDA(agent, env, advantage_fn, gamma=0.2, num_episodes=100, render=False
                 ######################################################################
                 # first concetanate state and isotropic gausian noise for action
                 state = torch.from_numpy(observation[env.env.goal_mask])
-                action = agent.act(observation)
                 #breakpoint()
-                if np.random.rand() < 0.3:
+                if corruption_on:
                     corrupted=True
                     noise_action = 2*np.random.rand(2) - 1
                     action = noise_action
+                    if np.random.rand() < 0.1:
+                        # corruption lasts an average of 10 timesteps
+                        corruption_on = False
+                else:
+                    action = agent.act(observation)
+                    if np.random.rand() < 0.1:
+                        # 10% chance of going into corrupted control on every timestep
+                        corruption_on = True
                 #action = 0.65*action + 0.35*noise_action
 
                 #laggy surrogate pilot -- only a 15% chance of updating action from current observation
@@ -87,9 +96,6 @@ def test_IDA(agent, env, advantage_fn, gamma=0.2, num_episodes=100, render=False
                 # copilot_action7 = state_conditioned_action7[0,-2:].numpy()
                 # copilot_action8 = state_conditioned_action8[0,-2:].numpy()
 
-                if render:
-                    rgb_frame = env.render()
-                    video_writer.write(rgb_frame)
                 if advantage_fn is not None:
                     copilot_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [copilot_action])
                     expert_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [action])
@@ -120,6 +126,13 @@ def test_IDA(agent, env, advantage_fn, gamma=0.2, num_episodes=100, render=False
                     partial_state_hist.append(state.numpy())
                     action_hist.append(action)
                 r += reward
+                if render:
+                    rgb_frame = env.render()
+                    if corrupted:
+                        rgb_frame[-20:,:] = np.array([255, 0, 0])
+                    if adv > margin:
+                        rgb_frame[-40:-20, :] = np.array([0,0,255])
+                    video_writer.write(rgb_frame)
 
                 if (done or terminated):
                     if r > 200: #-10:
@@ -175,16 +188,6 @@ if __name__ == "__main__":
 
     agent.load(config['expert_path'])
     Q_intervention = agent.q_func1
-    candidate_goals = 0.2 * np.array([
-                [1, 0],
-                [np.sqrt(2)/2, np.sqrt(2)/2],
-                [0, 1],
-                [-np.sqrt(2)/2, np.sqrt(2)/2],
-                [-1,0],
-                [-np.sqrt(2)/2, -np.sqrt(2)/2],
-                [0,-1],
-                [np.sqrt(2)/2, -np.sqrt(2)/2]
-            ])
     if config['advantage_fn']:
         advantage_fn = make_trajectory_intervetion_function(Q_intervention, env, discount=config['advantage_gamma'])
     else:

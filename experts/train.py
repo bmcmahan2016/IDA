@@ -28,7 +28,6 @@ def train_expert(env, expert, output_path):
         R = 0 # sum of episode rewards
         t = 0 # episode timestep
         while True:
-            breakpoint()
             action = expert.act(observation) #env.action_space.sample()
             observation, reward, done, terminated, info = env.step(action)
             R += reward
@@ -86,23 +85,32 @@ if __name__ == "__main__":
         description="trains an expert and uses this expert to collect demonstrations"
     )
 
-    parser.add_argument('-env', '--environment')
-    parser.add_argument('-agent', '--agent_type')
+    parser.add_argument('-env', '--environment', default='lunarlander')
+    parser.add_argument('-agent', '--agent_type', default='sac')
     parser.add_argument('-out', '--output_dir')
+    parser.add_argument('-collect_rollouts', action='store_true')
+    parser.add_argument('-agent_path', default=None)
+    parser.add_argument('-lr', default=3e-4)
     parser.add_argument('--rollouts', default=100000, type=int)
     parser.add_argument('--solved_reward', default=200, type=int)
 
     args = parser.parse_args()
 
     # initialize environment
-    env = make_env(args.environment)
+    env = make_env(args.environment, exploring_starts=True)
 
     # creates expert agent
     if args.agent_type=='sac':
         expert = make_SAC(env.observation_space.low.size, 
                         env.action_space.low.size, 
                         env.action_space.low, 
-                        env.action_space.high)
+                        env.action_space.high,
+                        lr=args.lr)
 
-    train_expert(env, expert, Path(args.output_dir))
-    collect_trajectories(env, expert, Path(args.output_dir), args.rollouts, args.solved_reward)
+    if args.agent_path is None:
+        train_expert(env, expert, Path(args.output_dir))
+    else:
+        expert.load(args.agent_path)
+        os.mkdir(args.output_dir)
+    if args.collect_rollouts:
+        collect_trajectories(env, expert, Path(args.output_dir), args.rollouts, args.solved_reward)

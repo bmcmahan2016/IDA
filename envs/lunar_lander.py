@@ -335,7 +335,7 @@ class LunarLander(gym.Env, EzPickle):
         if self._exploring_starts:
             initial_x *= 3*np.random.rand()-1.5
             initial_y *= 0.5*np.random.rand() + 0.5
-            angle = 2*np.random.rand()-1
+            angle = 3.14*(np.random.rand()-0.5)
 
 
         self.lander = self.world.CreateDynamicBody(

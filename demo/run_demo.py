@@ -12,7 +12,6 @@ from intervention.functions import make_intervetion_function, make_trajectory_in
 
 
 
-
 def test_with_human(total_episodes=0, 
                     drop_first_episodes=0, 
                     env=None,
@@ -25,19 +24,35 @@ def test_with_human(total_episodes=0,
     pygame.init()
     DISPLAYSURF = pygame.display.set_mode((1920, 1080))
     pygame.display.set_caption("Click for Joystick Control")
+    
 
     clock = pygame.time.Clock()
     joystick = pygame.joystick.Joystick(0)
 
     results_file = open(output_path / 'results.txt', 'w')
 
+    key_pressed = False
+    # Main loop
+    while not key_pressed:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                key_pressed = True  # Exit the loop if the window is closed
+            elif event.type == pygame.KEYDOWN:
+                key_pressed = True  # Exit the loop if any key is pressed
+
+
+
+
     for episode_num in range(total_episodes+drop_first_episodes):
         observation, info = env.reset()
+        image = env.render()
+        clock.tick(1)  # pause for a second to let the user adjust
         episode_over = False
 
         action_hist = []
         partial_state_hist = []
         total_return = 0
+        t_steps = 0
         while not episode_over:
 
             # check if the window was closed
@@ -51,7 +66,7 @@ def test_with_human(total_episodes=0,
             axis3 = joystick.get_axis(4) 
 
 
-            action = np.array([axis1, axis0])
+            action = np.array([axis3, axis0])
 
 
             #### have the copilot denoise the action
@@ -65,7 +80,7 @@ def test_with_human(total_episodes=0,
             if advantage_fn is not None:
                 copilot_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [copilot_action])
                 human_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [action])
-                adv = (torch.sum(torch.sign(copilot_adv)) / len(copilot_adv)).item()
+                adv = (torch.sum(torch.sign(copilot_adv-human_adv)) / len(copilot_adv)).item()
             else:
                 adv = 2  # always follow the copilot
 
@@ -79,16 +94,14 @@ def test_with_human(total_episodes=0,
                 action_hist.append(action)
 
             total_return += reward
+            t_steps += 1
 
-            if terminated or truncated:
-                episode_over = True
-            observation, reward, terminated, truncated, info = env.step(action)
-            if terminated or truncated:
+            if terminated or truncated or (t_steps >= 1000):
                 episode_over = True
 
 
             pygame.display.flip()
-            clock.tick(10)
+            clock.tick(30)   # sets the framerate for the game
             image = env.render()
             # image = Image.fromarray(image, 'RGB')
             # image = image.resize((1920, 1080), Image.Resampling.LANCZOS)
