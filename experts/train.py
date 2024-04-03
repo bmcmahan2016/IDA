@@ -59,12 +59,14 @@ def collect_trajectories(env, expert, output_path, num_rollouts, solved_reward):
             episode_reward = 0
             state_actions = []
             observation, info = env.reset()
+            t_steps = 0
             while True:
                 action = expert.act(observation) 
                 state_actions.append(np.concatenate([observation[env.env.goal_mask], action]))
                 observation, reward, terminated, truncated, info = env.step(action)
                 episode_reward += reward
-                done = (terminated or truncated)
+                done = (terminated or truncated or (t_steps >= 1000))
+                t_steps += 1
                 #env.render()
                 if done:
                     # lander gets a reward of 1,000 on succesful land
