@@ -21,7 +21,7 @@ import pfrl
 from pfrl import replay_buffers
 from experts.agents.sac import make_SAC
 import cv2
-from intervention.functions import make_intervetion_function, make_trajectory_intervetion_function
+from intervention.functions import make_intervetion_function, make_trajectory_intervetion_function, InterventionFunction
 
 import matplotlib
 matplotlib.use('Agg')
@@ -112,6 +112,7 @@ def test_IDA(agent, env, advantage_fn, corruption_type='noise', gamma=0.2, num_e
         partial_state_hist = []
         observation, _ = env.reset()
         agent.reset()
+        advantage_fn.reset()
         
         r = 0
         for t_step in range(1000):
@@ -125,27 +126,15 @@ def test_IDA(agent, env, advantage_fn, corruption_type='noise', gamma=0.2, num_e
             state_conditioned_action = torch.unsqueeze(torch.hstack([state, torch.from_numpy(action).float()]),  axis=0)
             state_conditioned_action = diffusion.sample(copilot, state_conditioned_action, gamma=gamma)
             copilot_action = state_conditioned_action[0,-2:].numpy()
-            
-            if advantage_fn is not None:
-                copilot_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [copilot_action])
-                expert_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [action])
-                adv = (torch.sum(torch.sign(copilot_adv - expert_adv)) / len(copilot_adv)).item()
-            else:
-                adv = np.inf
-            #adv=0
+
+
+            behavior_action, adv = advantage_fn.behavior_policy(state.numpy(), action, copilot_action) 
             if corrupted:
                 corr_vals.append(adv)
             else:
                 exp_vals.append(adv)
             
-            if adv > margin:
-                observation, reward, done, terminated, info = env.step(copilot_action)
-                partial_state_hist.append(state.numpy())
-                action_hist.append(copilot_action)
-            else:
-                observation, reward, done, terminated, info = env.step(action)
-                partial_state_hist.append(state.numpy())
-                action_hist.append(action)
+            observation, reward, done, terminated, info = env.step(behavior_action)
             r += reward
             if render:
                 rgb_frame = env.render()
@@ -209,11 +198,12 @@ if __name__ == "__main__":
 
     agent.load(config['expert_path'])
     Q_intervention = agent.q_func1
-    if config['advantage_fn']:
-        advantage_fn = make_trajectory_intervetion_function(Q_intervention, env, discount=config['advantage_gamma'])
+    if config['use_intervention']:
+        disable=False
     else:
-        advantage_fn = None
-
+        disable=True
+    advantage_fn = InterventionFunction(Q_intervention, env, num_goals=config['env']['num_goals'], discount=config['advantage_gamma'],
+                                        margin=config['margin'], disable=disable)
     # generates the surrogate pilot
     pilot = SurrogatePilot(agent, env, config['corruption_type'])
 
