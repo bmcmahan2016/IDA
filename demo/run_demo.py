@@ -8,9 +8,10 @@ from copilots.modules import SharedAutonomy
 from copilots.diffusion import Diffusion
 
 from experts.agents.sac import make_SAC
-from intervention.functions import make_intervetion_function, make_trajectory_intervetion_function
+from intervention.functions import InterventionFunction
 
-
+import tqdm
+from pathlib import Path
 
 def test_with_human(total_episodes=0, 
                     drop_first_episodes=0, 
@@ -42,17 +43,26 @@ def test_with_human(total_episodes=0,
 
 
 
+    # create numpy arrays to hold the states and actions
+    # these arrays can be saved later for analysis
+    state_dim=9
+    action_dim=2
+    max_episode_len = 1000
+    recorded_states = np.zeros((total_episodes, max_episode_len, state_dim))
+    recorded_actions = np.zeros((total_episodes, max_episode_len, action_dim))
+    recorded_rewards = np.zeros((total_episodes, max_episode_len, 1))
 
-    for episode_num in range(total_episodes+drop_first_episodes):
+    successes, crashes, timeouts = 0, 0, 0
+    for episode_num in tqdm.tqdm(range(total_episodes+drop_first_episodes)):
         observation, info = env.reset()
         image = env.render()
         clock.tick(1)  # pause for a second to let the user adjust
         episode_over = False
 
-        action_hist = []
-        partial_state_hist = []
+        
         total_return = 0
         t_steps = 0
+        advantage_fn.reset()
         while not episode_over:
 
             # check if the window was closed
@@ -77,43 +87,45 @@ def test_with_human(total_episodes=0,
             copilot_action = state_conditioned_action[0, -2:].numpy()
 
             ### compute the copilot advantage
-            if advantage_fn is not None:
-                copilot_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [copilot_action])
-                human_adv = advantage_fn(partial_state_hist + [state.numpy()], action_hist + [action])
-                adv = (torch.sum(torch.sign(copilot_adv-human_adv)) / len(copilot_adv)).item()
-            else:
-                adv = 2  # always follow the copilot
+            behavior_action, adv = advantage_fn.behavior_policy(state.numpy(), action, copilot_action) 
+            recorded_states[episode_num-drop_first_episodes, t_steps] = observation
+            recorded_actions[episode_num-drop_first_episodes, t_steps] = behavior_action
 
-
-            partial_state_hist.append(state.numpy())
-            if adv > intervention_margin:
-                observation, reward, terminated, truncated, info = env.step(copilot_action)
-                action_hist.append(copilot_action)
-            else:
-                observation, reward, terminated, truncated, info = env.step(action)
-                action_hist.append(action)
+            observation, reward, terminated, truncated, info = env.step(behavior_action)
+            # will get over-written by itself on next loop iter if not terminal state
+            recorded_states[episode_num-drop_first_episodes, t_steps+1] = observation
+            # reward at timesteps zero corresponds to s[0] and a[0]
+            recorded_rewards[episode_num-drop_first_episodes, t_steps] = reward
 
             total_return += reward
             t_steps += 1
 
-            if terminated or truncated or (t_steps >= 1000):
+            if terminated or truncated or (t_steps >= 999):
                 episode_over = True
+
 
 
             pygame.display.flip()
             clock.tick(30)   # sets the framerate for the game
             image = env.render()
-            # image = Image.fromarray(image, 'RGB')
-            # image = image.resize((1920, 1080), Image.Resampling.LANCZOS)
-            # mode, size, data = image.mode, image.size, image.tobytes()
-            # image = pygame.image.fromstring(data, size, mode)
-
-            # DISPLAYSURF.blit(image, (0,0))
             pygame.display.update()
 
-        if episode_num > drop_first_episodes:
-            results_file.write('episode total return: '  + str(total_return) + '\n')
+        if total_return > 200: 
+            successes += 1
+        elif reward == -100:
+            crashes += 1
+        elif t_steps == 999:
+            timeouts += 1
+
+    results_file.write('successful episodes: ' + str(successes) + '\n')
+    results_file.write('crashed episodes: ' + str(crashes) + '\n')
+    results_file.write('timeout episodes: ' + str(timeouts) + '\n')
+    results_file.write("\n")
     results_file.close()
+
+    np.save(output_path / Path("states.npy"), recorded_states)
+    np.save(output_path / Path("behavior_actions.npy"), recorded_actions,)
+    np.save(output_path / Path("rewards.npy"), recorded_rewards, )
 
 
 
@@ -145,13 +157,13 @@ if __name__ == '__main__':
                  env.action_space.high)
     agent.load(config['intervention']['path'])
     Q_intervention = agent.q_func1
-    if config['advantage_fn']:
-        advantage_fn = make_trajectory_intervetion_function(Q_intervention, 
-                                                            env, 
-                                                            discount=config['intervention']['gamma']
-                                                            )
+
+    if config['use_intervention']:
+        disable=False
     else:
-        advantage_fn=None
+        disable=True
+    advantage_fn = InterventionFunction(Q_intervention, env, num_goals=config['env']['num_goals'], discount=config['intervention']['gamma'],
+                                        margin=config['margin'], disable=disable)
     
     copilot = SharedAutonomy(obs_size=config['copilot']['obs_size'])
     copilot.load_state_dict(torch.load(config['copilot']['path']))

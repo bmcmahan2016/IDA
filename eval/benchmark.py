@@ -1,100 +1,29 @@
-'''
-Author: Brandon
-Date: March 6, 2024
-Description: Evaluates the performance of a copilot, surrogate
-human pilot, and intervention function in a Gymnasium environment
 
-'''
-from envs.utils import make_env
-from datetime import datetime
-import numpy as np  
-import tqdm
-import pygame
-from gym.utils.play import play
+import numpy as np
 import torch
+import argparse
 from copilots.diffusion import Diffusion
 from copilots.modules import SharedAutonomy
-import torch.distributions as distributions
-import torch.nn as nn
-from pfrl.nn.lmbda import Lambda
-import pfrl
-from pfrl import replay_buffers
+import yaml
+import os
+from pathlib import Path
+import colored_traceback
+from envs.utils import make_env
+import multiprocessing
+from functools import partial
+import tqdm
+from pilots import SurrogatePilot
 from experts.agents.sac import make_SAC
-import cv2
 from intervention.functions import make_intervetion_function, make_trajectory_intervetion_function, InterventionFunction
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-
+import dill
+import concurrent.futures
+from multiprocessing import Manager, Pool
 
 
-class SurrogatePilot(object):
-    def __init__(self, 
-                 expert, 
-                 env,
-                 corruption_type,
-                 corruption_prob = 0.1,
-                 restore_prob = 0.1):
-        self._expert = expert
-        self._corruption_type = corruption_type
-        self._corruption_prob = corruption_prob
-        self._restore_prob = restore_prob
-        self._env = env
-
-        self._last_action = None
-        self._corruption_on = False
-
-    def reset(self):
-        self._prev_action = None
-        self._corruption_on = False
-
-    def _is_corrupted(self):
-        # return True and possibly turn corruption off
-        if self._corruption_on:
-            if np.random.rand() < self._restore_prob:
-                self._corruption_on = False
-            return True
-        
-        # return False and possibly turn corruption on
-        else:
-            if np.random.rand() < self._corruption_prob:
-                self._corruption_on = True
-            return False
-
-    def act(self, observation):
-        with self._expert.eval_mode():
-
-            # default expert action
-            action = self._expert.act(observation)
-            if self._corruption_type=='none':
-                self._prev_action = action
-                return action, False
-            # no-op and random corruption are performed always if specified
-            if self._corruption_type=="no-op":
-                action = np.zeros_like(self._expert.act(observation))
-                return action, False
-            if self._corruption_type=="random":
-                action = self._env.action_space.sample()
-                return action, False
-        
-            # corrupt with noise or lag if corruption is on
-            is_corrupted = self._is_corrupted()
-            if is_corrupted:
-                if self._corruption_type=='noise':
-                    action = self._env.action_space.sample()
-                if self._corruption_type=='lag':
-                    if self._prev_action is None:
-                        action = self._expert.act(observation)
-                    else:
-                        action = self._prev_action
-
-        # return action and store previous
-        self._prev_action = action
-        return action, is_corrupted
+colored_traceback.add_hook(always=True)
 
 
-def test_IDA(agent, env, advantage_fn, corruption_type='noise', gamma=0.2, num_episodes=100, render=False, margin=0.5):
+def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='noise', gamma=0.2, num_episodes=100, render=False, margin=0.5):
     #margin= 0.5 #0.1  # 0.5
     timeouts = 0
     successes = 0
@@ -156,89 +85,128 @@ def test_IDA(agent, env, advantage_fn, corruption_type='noise', gamma=0.2, num_e
         video_writer.release()
     return successes, crashes, timeouts, corr_vals, exp_vals
     
+def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_evaluations=10, gamma=0.2, num_episodes=100, render=False, margin=0.5):
+    sr, cr, to = [], [], []
+    for _ in tqdm.tqdm(range(num_evaluations)):
+        env.env.initialize_goal_space()
+        successes, crashes, timeouts, corr_vals, exp_vals = test_IDA(agent, 
+                                                                     env, 
+                                                                     copilot,
+                                                                     diffusion,
+                                                                     advantage_fn, 
+                                                                     gamma=gamma, 
+                                                                     num_episodes=num_episodes, 
+                                                                     render=render, 
+                                                                     margin=margin
+                                                                     )
+        sr.append(successes)
+        cr.append(crashes)
+        to.append(timeouts)
+    # write results.txt
+    sr_mean = np.mean(sr) / num_episodes
+    sr_sem = np.std(sr) / np.sqrt(num_evaluations)
+    
+    crash_mean = np.mean(cr) / num_episodes
+    crash_sem = np.std(cr) / np.sqrt(num_evaluations)
+    
+    to_mean = np.mean(to) / num_episodes
+    to_sem = np.std(to) / np.sqrt(num_evaluations)
+    num_goals = advantage_fn._NUM_GOALS
+    f = open(output_path / 'results.txt', 'a')
+    f.write("NUMBER OF GOALS:   " + str(num_goals) + "\n")
+    f.write('success rate: ' + str(sr_mean) + ' +/-' + str(sr_sem) + '\n')
+    f.write('crash rate: ' + str(crash_mean) + ' +/-' + str(crash_sem) + '\n')
+    f.write('timeout rate: ' + str(to_mean) + ' +/-' + str(to_sem) + '\n')
+    f.write('number of evaluations: ' + str(num_evaluations) + '\n')
+    f.write('episodes per eval: ' + str(num_episodes) + '\n')
+    f.write("\n")
 
-if __name__ == "__main__":
-    import argparse
-    import yaml
-    import os
-    from pathlib import Path
-    import colored_traceback
-    colored_traceback.add_hook(always=True)
+    f.close()
 
+def load_config():
     parser = argparse.ArgumentParser(
         prog="Benchmark IDA",
         description="benchmarks IDA with surrogate pilot"
     )
-
     parser.add_argument('config_path')
     args = parser.parse_args()
     with open(args.config_path) as config_file:
         config = yaml.safe_load(config_file.read())
-    
 
+    return config
+
+def create_envs(num_goals, env_name, render):
+    envs = []
+    for N in num_goals:
+        if render:
+            envs.append(make_env(env_name, render_mode='rgb_array', N=N))
+        else:
+            envs.append(make_env(env_name, N=N))
+    return envs
+
+def parse_num_goals(config):
+    if isinstance(config['env']['num_goals'], str):
+        num_goals = config['env']['num_goals'].split(',')
+        # required to convert from str to int
+        num_goals = [int(x) for x in num_goals]
+    else:
+        num_goals = [config['env']['num_goals']]
+    return num_goals
+
+def create_intervention_fns(Q_intervention, envs, num_goals, config):
+    if config['use_intervention']:
+        disable=False
+    else:
+        disable=True
+    intervention_fns = []
+    for N, env in zip(num_goals, envs):
+        intervention_fns.append(InterventionFunction(Q_intervention, 
+                                                  env, 
+                                                  num_goals=N, 
+                                                  discount=config['advantage_gamma'], 
+                                                  margin=config['margin'], 
+                                                  disable=disable))
+    return intervention_fns
+
+
+def launch_evaluations():
+    
+    config = load_config()
     output_path = Path(config['output_dir'])
     os.makedirs(output_path, exist_ok=True)
-
-    # load the environment
-    if config['render']:
-        env = make_env(config['env']['env_name'], render_mode='rgb_array', N=config['env']['num_goals'])
-    else:
-        env = make_env(config['env']['env_name'], N=config['env']['num_goals'])
     
+    num_goals = parse_num_goals(config)
+    envs = create_envs(num_goals, config['env']['env_name'], config['render'])
+
     # loads the copilot
     copilot = SharedAutonomy(obs_size=config['copilot']['state_conditioned_action_dim'])
     copilot.load_state_dict(torch.load(config['copilot']['copilot_path']))
     diffusion = Diffusion(action_dim=config['copilot']['action_dim'], img_size=64, device='cpu')
 
     # load the intervention function
-    agent = make_SAC(env.observation_space.low.size, 
-                        env.action_space.low.size, 
-                        env.action_space.low, 
-                        env.action_space.high)
+    agent = make_SAC(envs[0].observation_space.low.size, 
+                        envs[0].action_space.low.size, 
+                        envs[0].action_space.low, 
+                        envs[0].action_space.high)
 
     agent.load(config['expert_path'])
+    pilot = SurrogatePilot(agent, envs[0], config['corruption_type'])
     Q_intervention = agent.q_func1
-    if config['use_intervention']:
-        disable=False
-    else:
-        disable=True
-    advantage_fn = InterventionFunction(Q_intervention, env, num_goals=config['env']['num_goals'], discount=config['advantage_gamma'],
-                                        margin=config['margin'], disable=disable)
-    # generates the surrogate pilot
-    pilot = SurrogatePilot(agent, env, config['corruption_type'])
+    intervention_fns = create_intervention_fns(Q_intervention, envs, num_goals, config)
 
-    hist = []
-    for _ in tqdm.tqdm(range(config['num_evaluations'])):
-        env.env.initialize_goal_space()     # required to reset goals for each evaluation
-        successes, crashes, timeouts, corr_vals, exp_vals = test_IDA(pilot,
-                                                env, 
-                                                advantage_fn, 
-                                                gamma=config['gamma'], 
-                                                num_episodes=config['num_episodes'],
-                                                render=config['render'],
-                                                margin=config['margin'])
-        hist.append(successes)
+    for env, intervention_fn in zip(envs, intervention_fns):
+        evaluate_IDA(pilot, 
+                     env, 
+                     copilot,
+                     diffusion,
+                     intervention_fn, 
+                     output_path, 
+                     num_evaluations=config['num_evaluations'], 
+                     gamma=config['gamma'], 
+                     num_episodes=config['num_episodes'],
+                     render=config['render'])
 
-    # write the config file
-    with open(output_path / 'config.yaml', 'w') as outfile:
-        yaml.dump(config, outfile, default_flow_style=False)
-
-    plt.hist(corr_vals, alpha=0.33, bins=np.linspace(-1, 1, 10), density=True)
-    plt.hist(exp_vals, alpha=0.33, bins=np.linspace(-1, 1, 10), density=True)
-    plt.ylabel("Frequency")
-    plt.xlabel("Advantage Value")
-    plt.legend(["Corrupted Expert" , "Expert"])
-    plt.title("I(copilot, expert)")
-    plt.savefig(output_path / 'advantages.png')
-
-    # write results.txt
-    mean = np.mean(hist)
-    std = np.std(hist)
-    num_samples = len(hist)
-    f = open(output_path / 'results.txt', 'w')
-    f.write('mean success: ' + str(mean) + '\n')
-    f.write('standard deviation: ' +  str(std) + '\n')
-    f.write('number of evaluations: ' + str(num_samples) + '\n')
-
-    f.close()
-
+    
+    
+if __name__=='__main__':
+    launch_evaluations()
