@@ -7,17 +7,15 @@ from copilots.modules import SharedAutonomy
 import yaml
 import os
 from pathlib import Path
-import colored_traceback
 from envs.utils import make_env
-import multiprocessing
-from functools import partial
+from experts.agents.sac import make_SAC
+import colored_traceback
 import tqdm
 from pilots import SurrogatePilot
-from experts.agents.sac import make_SAC
-from intervention.functions import make_intervetion_function, make_trajectory_intervetion_function, InterventionFunction
-import dill
-import concurrent.futures
+from intervention.functions import InterventionFunction
 from multiprocessing import Manager, Pool
+from datetime import datetime
+import matplotlib.pyplot as plt
 
 
 colored_traceback.add_hook(always=True)
@@ -34,11 +32,11 @@ def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='nois
         rgb_frame = env.render()
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(str(output_path) + "/" + str(datetime.now()) + "video.mp4", fourcc, 24, (rgb_frame.shape[1], rgb_frame.shape[0]))
-    corr_vals = []
-    exp_vals = []
+    corruption_flag = []
+    copilot_advs = []
+    intervened_flag = []
+    episode_returns = []
     for _ in range(num_episodes):
-        action_hist = []
-        partial_state_hist = []
         observation, _ = env.reset()
         agent.reset()
         advantage_fn.reset()
@@ -51,6 +49,7 @@ def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='nois
             # first concetanate state and isotropic gausian noise for action
             state = torch.from_numpy(observation[env.env.goal_mask])
             action, corrupted = agent.act(observation)
+            corruption_flag.append(corrupted)
 
             state_conditioned_action = torch.unsqueeze(torch.hstack([state, torch.from_numpy(action).float()]),  axis=0)
             state_conditioned_action = diffusion.sample(copilot, state_conditioned_action, gamma=gamma)
@@ -58,10 +57,11 @@ def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='nois
 
 
             behavior_action, adv = advantage_fn.behavior_policy(state.numpy(), action, copilot_action) 
-            if corrupted:
-                corr_vals.append(adv)
+            if np.all(behavior_action != action):
+                intervened_flag.append(True)
             else:
-                exp_vals.append(adv)
+                intervened_flag.append(False)
+            copilot_advs.append(adv)
             
             observation, reward, done, terminated, info = env.step(behavior_action)
             r += reward
@@ -74,54 +74,167 @@ def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='nois
                 video_writer.write(rgb_frame)
 
             if (done or terminated):
-                if r > 200: #-10:
-                    successes += 1
-                if reward <= -100:
-                    crashes += 1
+                episode_returns.append(r)
                 break
-            if t_step == 999:
-                timeouts += 1
+            #     if r > 200: #-10:
+            #         successes += 1
+            #     if reward <= -100:
+            #         crashes += 1
+            #     break
+            # if t_step == 999:
+            #     timeouts += 1
     if render:
         video_writer.release()
-    return successes, crashes, timeouts, corr_vals, exp_vals
+    return episode_returns,  np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag) #successes, crashes, timeouts, np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag)
     
-def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_evaluations=10, gamma=0.2, num_episodes=100, render=False, margin=0.5):
-    sr, cr, to = [], [], []
-    for _ in tqdm.tqdm(range(num_evaluations)):
-        env.env.initialize_goal_space()
-        successes, crashes, timeouts, corr_vals, exp_vals = test_IDA(agent, 
-                                                                     env, 
-                                                                     copilot,
-                                                                     diffusion,
-                                                                     advantage_fn, 
-                                                                     gamma=gamma, 
-                                                                     num_episodes=num_episodes, 
-                                                                     render=render, 
-                                                                     margin=margin
-                                                                     )
-        sr.append(successes)
-        cr.append(crashes)
-        to.append(timeouts)
+def write_reacher_results(eval_returns, output_path, num_goals):
+
+    # if lunar lander use this code
+
+    avg_returns = []
+    for episode_returns in eval_returns:
+        successes = 0
+        crashes = 0
+        avg_returns.append(np.mean(episode_returns))
+
+    num_episodes = len(eval_returns[0])  # number of episodes in first evaluation
+    num_evaluations = len(eval_returns)
+    
     # write results.txt
-    sr_mean = np.mean(sr) / num_episodes
-    sr_sem = np.std(sr) / np.sqrt(num_evaluations)
+    mean_return = np.mean(avg_returns)
+    return_sem = np.std(avg_returns) / np.sqrt(num_evaluations)
     
-    crash_mean = np.mean(cr) / num_episodes
-    crash_sem = np.std(cr) / np.sqrt(num_evaluations)
-    
-    to_mean = np.mean(to) / num_episodes
-    to_sem = np.std(to) / np.sqrt(num_evaluations)
-    num_goals = advantage_fn._NUM_GOALS
     f = open(output_path / 'results.txt', 'a')
     f.write("NUMBER OF GOALS:   " + str(num_goals) + "\n")
-    f.write('success rate: ' + str(sr_mean) + ' +/-' + str(sr_sem) + '\n')
-    f.write('crash rate: ' + str(crash_mean) + ' +/-' + str(crash_sem) + '\n')
-    f.write('timeout rate: ' + str(to_mean) + ' +/-' + str(to_sem) + '\n')
+    f.write('average return: ' + str(mean_return) + ' +/-' + str(return_sem) + '\n')
     f.write('number of evaluations: ' + str(num_evaluations) + '\n')
     f.write('episodes per eval: ' + str(num_episodes) + '\n')
     f.write("\n")
 
     f.close()
+
+def write_lunar_lander_results(eval_returns, output_path, num_goals):
+
+    # if lunar lander use this code
+    success_rate = []
+    crash_rate = []
+    for episode_returns in eval_returns:
+        successes = 0
+        crashes = 0
+        for r in episode_returns:
+            if r > 200:
+                successes += 1
+            elif r <= -100:
+                crashes += 1
+        success_rate.append(successes)
+        crash_rate.append(crashes)
+
+    num_episodes = len(eval_returns[0])  # number of episodes in first evaluation
+    num_evaluations = len(eval_returns)
+    
+    # write results.txt
+    sr_mean = np.mean(success_rate) / num_episodes
+    sr_sem = np.std(success_rate) / np.sqrt(num_evaluations)
+    
+    crash_mean = np.mean(crash_rate) / num_episodes
+    crash_sem = np.std(crash_rate) / np.sqrt(num_evaluations)
+    
+    f = open(output_path / 'results.txt', 'a')
+    f.write("NUMBER OF GOALS:   " + str(num_goals) + "\n")
+    f.write('success rate: ' + str(sr_mean) + ' +/-' + str(sr_sem) + '\n')
+    f.write('crash rate: ' + str(crash_mean) + ' +/-' + str(crash_sem) + '\n')
+    f.write('number of evaluations: ' + str(num_evaluations) + '\n')
+    f.write('episodes per eval: ' + str(num_episodes) + '\n')
+    f.write("\n")
+
+    f.close()
+
+def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_evaluations=10, gamma=0.2, num_episodes=100, render=False, margin=0.5):
+    sr, cr, to = [], [], []
+    eval_returns = []  # list of episode returns (list of list)
+    for _ in tqdm.tqdm(range(num_evaluations)):
+        env.env.initialize_goal_space()
+        #successes, crashes, timeouts, corrupted_flag, copilot_advs, intervened_flag 
+        episode_returns, corrupted_flag, copilot_advs, intervened_flag  = test_IDA(agent, 
+                                                                                    env, 
+                                                                                    copilot,
+                                                                                    diffusion,
+                                                                                    advantage_fn, 
+                                                                                    gamma=gamma, 
+                                                                                    num_episodes=num_episodes, 
+                                                                                    render=render, 
+                                                                                    margin=margin
+                                                                                    )
+        eval_returns.append(episode_returns)
+
+
+    # call a lunar lander specific writing function here
+    if 'lunar' in str(output_path):
+        write_lunar_lander_results(eval_returns, output_path, advantage_fn._NUM_GOALS)
+    # or call a reacher specific writing function here
+    if 'reacher' in str(output_path):
+        write_reacher_results(eval_returns, output_path, advantage_fn._NUM_GOALS)
+    #    sr.append(successes)
+    #    cr.append(crashes)
+    #    to.append(timeouts)
+    # write results.txt
+    # sr_mean = np.mean(sr) / num_episodes
+    # sr_sem = np.std(sr) / np.sqrt(num_evaluations)
+    
+    # crash_mean = np.mean(cr) / num_episodes
+    # crash_sem = np.std(cr) / np.sqrt(num_evaluations)
+    
+    # to_mean = np.mean(to) / num_episodes
+    # to_sem = np.std(to) / np.sqrt(num_evaluations)
+    # num_goals = advantage_fn._NUM_GOALS
+    # f = open(output_path / 'results.txt', 'a')
+    # f.write("NUMBER OF GOALS:   " + str(num_goals) + "\n")
+    # f.write('success rate: ' + str(sr_mean) + ' +/-' + str(sr_sem) + '\n')
+    # f.write('crash rate: ' + str(crash_mean) + ' +/-' + str(crash_sem) + '\n')
+    # f.write('timeout rate: ' + str(to_mean) + ' +/-' + str(to_sem) + '\n')
+    # f.write('number of evaluations: ' + str(num_evaluations) + '\n')
+    # f.write('episodes per eval: ' + str(num_episodes) + '\n')
+    # f.write("\n")
+
+    # f.close()
+
+    # save information about the intervention function
+    if advantage_fn._disable == False:
+        num_goals = advantage_fn._NUM_GOALS
+        plt.hist(copilot_advs[corrupted_flag==False], alpha=0.5)
+        plt.hist(copilot_advs[corrupted_flag], alpha=0.5)
+        plt.legend(['Actions Drawn from Expert Policy', 'Actions Drawn from Corrupted Policy'])
+        plt.title("Distribution of Copilot Advantages")
+        plt.ylabel("Frequency")
+        plt.xlabel("Copilot Advantage Score")
+        hist_name = str(num_goals) + "_goals_copilot_advantage_distribution.eps"
+        plt.savefig(output_path / hist_name)
+        plt.close()
+
+        fname = str(num_goals) + "_goals_copilot_advs.npy"
+        np.save(output_path / fname, copilot_advs)
+        fname = str(num_goals) + "_goals_corrupted_flag.npy"
+        np.save(output_path / fname, corrupted_flag)
+        fname = str(num_goals) + "_goals_intervened_flag.npy"
+        np.save(output_path / fname, intervened_flag)
+
+        # distribution for un-intervned states
+        corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==False]==True)
+        expert_policy_states = np.sum(corrupted_flag[intervened_flag==False]==False)
+        plt.pie([corrupt_policy_states, expert_policy_states], labels=["corrupt policy", "expert policy"])
+        plt.title("Unintervened States")
+        fig_name = str(num_goals) + "_goals_unintervened_pie.eps"
+        plt.savefig(output_path / fig_name)
+        plt.close()
+
+        # distribution for intervened states
+        corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==True]==True)
+        expert_policy_states = np.sum(corrupted_flag[intervened_flag==True]==False)
+        plt.pie([corrupt_policy_states, expert_policy_states], labels=["corrupt policy", "expert policy"])
+        plt.title("Intervened States")
+        fig_name = str(num_goals) + "_goals_intervened_pie.eps"
+        plt.savefig(output_path / fig_name)
+        plt.close()
 
 def load_config():
     parser = argparse.ArgumentParser(
@@ -168,12 +281,16 @@ def create_intervention_fns(Q_intervention, envs, num_goals, config):
                                                   disable=disable))
     return intervention_fns
 
-
 def launch_evaluations():
-    
     config = load_config()
-    output_path = Path(config['output_dir'])
-    os.makedirs(output_path, exist_ok=True)
+    if config['use_intervention']:
+        output_path = Path(config['output_dir']) / Path(config['env']['env_name']) / Path(config['corruption_type']) / "IDA" / str(datetime.now())
+    elif config['gamma'] != 0:
+        output_path = Path(config['output_dir']) / Path(config['env']['env_name']) / Path(config['corruption_type']) / "Copilot" / str(datetime.now())
+    else:
+        output_path = Path(config['output_dir']) / Path(config['env']['env_name']) / Path(config['corruption_type']) / "Pilot" / str(datetime.now())
+    # prevent over-writting of previous results
+    os.makedirs(output_path, exist_ok=False)
     
     num_goals = parse_num_goals(config)
     envs = create_envs(num_goals, config['env']['env_name'], config['render'])
@@ -205,8 +322,8 @@ def launch_evaluations():
                      gamma=config['gamma'], 
                      num_episodes=config['num_episodes'],
                      render=config['render'])
+    with open(output_path / 'config.yaml', 'w') as outfile:
+        yaml.dump(config, outfile, default_flow_style=False)
 
-    
-    
 if __name__=='__main__':
     launch_evaluations()

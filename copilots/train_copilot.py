@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import numpy as np
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from torch import optim
@@ -59,9 +60,9 @@ def train(args):
             #save_images(sampled_images, os.path.join("results", args.run_name, f"{epoch}.jpg"))
             torch.save(model.state_dict(), os.path.join("models", args.output_dir, f"ckpt.pt"))
             plt.figure()
-            plt.plot(training_loss)
+            plt.plot(np.log(training_loss))
             plt.xlabel("Epoch")
-            plt.ylabel("Training Loss")
+            plt.ylabel("Log Training Loss")
             plt.savefig("models" / Path(args.output_dir) / "training_loss.png")
             plt.close()
 

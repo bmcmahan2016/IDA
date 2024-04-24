@@ -13,6 +13,10 @@ from intervention.functions import InterventionFunction
 import tqdm
 from pathlib import Path
 
+white = (255, 255, 255)
+green = (0, 255, 0)
+blue = (0, 0, 128)
+
 def test_with_human(total_episodes=0, 
                     drop_first_episodes=0, 
                     env=None,
@@ -75,8 +79,23 @@ def test_with_human(total_episodes=0,
             axis2 = joystick.get_axis(3)
             axis3 = joystick.get_axis(4) 
 
+            # create deadzone on controllers
+            if np.abs(axis0) < 0.01:
+                axis0=0
+            if np.abs(axis3) < 0.01:
+                axis3=0
 
+            # right stick up fires bottom thruster
+            # left stick right fires left thruster
+            #action = np.array([-axis3, axis0])
+
+            # right stick down fires bottom thruster
+            # left stick right fires left thruster
             action = np.array([axis3, axis0])
+
+            # right stick down fires bottom thruster
+            # left stick right fires right thruster
+            #action = np.array([axis3, -axis0])
 
 
             #### have the copilot denoise the action
@@ -100,14 +119,28 @@ def test_with_human(total_episodes=0,
             total_return += reward
             t_steps += 1
 
+            font = pygame.font.Font('freesansbold.ttf', 20)
+ 
+            # create a text surface object,
+            # on which text is drawn on it.
+            remaining_time = 0.03 * (1000-t_steps)
+            text = font.render(f"time remaining: {remaining_time:.2f} secs", True, green, blue)
+            
+            # create a rectangular object for the
+            # text surface object
+            textRect = text.get_rect()
+            
+            # set the center of the rectangular object.
+            textRect.center = (200, 50)
+
             if terminated or truncated or (t_steps >= 999):
                 episode_over = True
 
 
-
+            DISPLAYSURF.blit(text, textRect)
             pygame.display.flip()
             clock.tick(30)   # sets the framerate for the game
-            image = env.render()
+            #image = env.render()
             pygame.display.update()
 
         if total_return > 200: 
@@ -173,7 +206,7 @@ if __name__ == '__main__':
                           )
 
     output_path = Path(config['output_dir'])
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(output_path)
 
     test_with_human(total_episodes = config['num_evaluations'],
                     drop_first_episodes = config['drop_first_episodes'],

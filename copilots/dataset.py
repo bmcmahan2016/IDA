@@ -21,7 +21,7 @@ class ExpertDemonstrations(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         expert_demonstrations = self.expert_demonstrations[idx]
-        return expert_demonstrations
+        return np.float32(expert_demonstrations)
     
 if __name__ == '__main__':
     dataset = ExpertDemonstrations('/home/necl/code/lunar-lander/expert_trajectories_random_goal.npy')
