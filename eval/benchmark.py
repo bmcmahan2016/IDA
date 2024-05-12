@@ -16,12 +16,24 @@ from intervention.functions import InterventionFunction
 from multiprocessing import Manager, Pool
 from datetime import datetime
 import matplotlib.pyplot as plt
-
+import cv2
 
 colored_traceback.add_hook(always=True)
 
 
-def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='noise', gamma=0.2, num_episodes=100, render=False, margin=0.5):
+def test_IDA(agent, 
+             env, 
+             copilot, 
+             diffusion, 
+             advantage_fn, 
+             corruption_type='noise', 
+             output_path = None,
+             gamma=0.2, 
+             num_episodes=100, 
+             render=False, 
+             margin=0.5, 
+             discard_reacher_control_reward=False
+             ):
     #margin= 0.5 #0.1  # 0.5
     timeouts = 0
     successes = 0
@@ -64,14 +76,20 @@ def test_IDA(agent, env, copilot, diffusion, advantage_fn, corruption_type='nois
             copilot_advs.append(adv)
             
             observation, reward, done, terminated, info = env.step(behavior_action)
+            if discard_reacher_control_reward:
+                reward = info['reward_dist']
             r += reward
             if render:
                 rgb_frame = env.render()
                 if corrupted:
-                    rgb_frame[-20:,:] = np.array([255, 0, 0])
+                    cv2.putText(rgb_frame, "C", (400, 350), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_4)
                 if adv > margin:
-                    rgb_frame[-40:-20, :] = np.array([0,0,255])
-                video_writer.write(rgb_frame)
+                    cv2.putText(rgb_frame, "I", (400, 375), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_4)
+                cv2.putText(rgb_frame, "Pilot: " + str(action), (50, 350), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_4)
+                cv2.putText(rgb_frame, "Copilot: " + str(copilot_action), (50, 375), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_4)
+                frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite("frame%d.jpg"%t_step, frame)
+                video_writer.write(frame)
 
             if (done or terminated):
                 episode_returns.append(r)
@@ -151,6 +169,8 @@ def write_lunar_lander_results(eval_returns, output_path, num_goals):
 
 def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_evaluations=10, gamma=0.2, num_episodes=100, render=False, margin=0.5):
     sr, cr, to = [], [], []
+    # determines if reacher should discard the control return
+    drcr = ('distance_reward' in str(output_path))
     eval_returns = []  # list of episode returns (list of list)
     for _ in tqdm.tqdm(range(num_evaluations)):
         env.env.initialize_goal_space()
@@ -163,7 +183,9 @@ def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_
                                                                                     gamma=gamma, 
                                                                                     num_episodes=num_episodes, 
                                                                                     render=render, 
-                                                                                    margin=margin
+                                                                                    margin=margin,
+                                                                                    output_path=output_path,
+                                                                                    discard_reacher_control_reward=drcr,
                                                                                     )
         eval_returns.append(episode_returns)
 

@@ -42,7 +42,7 @@ class Diffusion:
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None]
         Ɛ = torch.randn_like(actions)
-        
+
         actions = sqrt_alpha_hat * actions + sqrt_one_minus_alpha_hat * Ɛ
         x = torch.hstack([states, actions])
         Ɛ = torch.hstack([torch.zeros_like(states), Ɛ])
@@ -89,4 +89,3 @@ class Diffusion:
         # x = (x.clamp(-1, 1) + 1) / 2
         # x = (x * 255).type(torch.uint8)
         return x
-
