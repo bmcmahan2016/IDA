@@ -48,6 +48,10 @@ def test_IDA(agent,
     copilot_advs = []
     intervened_flag = []
     episode_returns = []
+    episode_lengths = []
+    # history of all past positions
+    x_pos_history = []  
+    y_pos_history = []
     for _ in range(num_episodes):
         observation, _ = env.reset()
         agent.reset()
@@ -60,6 +64,8 @@ def test_IDA(agent,
             ######################################################################
             # first concetanate state and isotropic gausian noise for action
             state = torch.from_numpy(observation[env.env.goal_mask])
+            x_pos_history.append(state[0])
+            y_pos_history.append(state[1])
             action, corrupted = agent.act(observation)
             corruption_flag.append(corrupted)
 
@@ -93,7 +99,10 @@ def test_IDA(agent,
 
             if (done or terminated):
                 episode_returns.append(r)
+                episode_lengths.append(t_step)
                 break
+            elif t_step == 999:
+                episode_lengths.append(t_step)
             #     if r > 200: #-10:
             #         successes += 1
             #     if reward <= -100:
@@ -103,7 +112,7 @@ def test_IDA(agent,
             #     timeouts += 1
     if render:
         video_writer.release()
-    return episode_returns,  np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag) #successes, crashes, timeouts, np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag)
+    return episode_returns,  np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag), np.array(x_pos_history), np.array(y_pos_history), np.array(episode_lengths) #successes, crashes, timeouts, np.array(corruption_flag), np.array(copilot_advs), np.array(intervened_flag)
     
 def write_reacher_results(eval_returns, output_path, num_goals):
 
@@ -172,10 +181,17 @@ def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_
     # determines if reacher should discard the control return
     drcr = ('distance_reward' in str(output_path))
     eval_returns = []  # list of episode returns (list of list)
+    unintervened_corrupt_policy_states = []
+    unintervened_expert_policy_states = []
+    intervened_corrupt_policy_states = []
+    intervened_expert_policy_states = []
+    position_hist = []
+    episode_durations = []
+    intervened_flag_hist = []
     for _ in tqdm.tqdm(range(num_evaluations)):
         env.env.initialize_goal_space()
         #successes, crashes, timeouts, corrupted_flag, copilot_advs, intervened_flag 
-        episode_returns, corrupted_flag, copilot_advs, intervened_flag  = test_IDA(agent, 
+        episode_returns, corrupted_flag, copilot_advs, intervened_flag, x_pos, y_pos, episode_lengths  = test_IDA(agent, 
                                                                                     env, 
                                                                                     copilot,
                                                                                     diffusion,
@@ -188,6 +204,13 @@ def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_
                                                                                     discard_reacher_control_reward=drcr,
                                                                                     )
         eval_returns.append(episode_returns)
+        unintervened_corrupt_policy_states.append(np.sum(corrupted_flag[intervened_flag==False]==True))
+        unintervened_expert_policy_states.append(np.sum(corrupted_flag[intervened_flag==False]==False))
+        intervened_corrupt_policy_states.append(np.sum(corrupted_flag[intervened_flag==True]==True))
+        intervened_expert_policy_states.append(np.sum(corrupted_flag[intervened_flag==True]==False))
+        position_hist.append(np.hstack([x_pos.reshape(-1,1), y_pos.reshape(-1,1)]))
+        episode_durations.append(episode_lengths)
+        intervened_flag_hist.extend(intervened_flag)
 
 
     # call a lunar lander specific writing function here
@@ -223,8 +246,8 @@ def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_
     # save information about the intervention function
     if advantage_fn._disable == False:
         num_goals = advantage_fn._NUM_GOALS
-        plt.hist(copilot_advs[corrupted_flag==False], alpha=0.5)
-        plt.hist(copilot_advs[corrupted_flag], alpha=0.5)
+        plt.hist(copilot_advs[corrupted_flag==False], alpha=0.5, bins=20)
+        plt.hist(copilot_advs[corrupted_flag], alpha=0.5, bins=20)
         plt.legend(['Actions Drawn from Expert Policy', 'Actions Drawn from Corrupted Policy'])
         plt.title("Distribution of Copilot Advantages")
         plt.ylabel("Frequency")
@@ -238,23 +261,35 @@ def evaluate_IDA(agent, env, copilot, diffusion, advantage_fn, output_path, num_
         fname = str(num_goals) + "_goals_corrupted_flag.npy"
         np.save(output_path / fname, corrupted_flag)
         fname = str(num_goals) + "_goals_intervened_flag.npy"
-        np.save(output_path / fname, intervened_flag)
+        np.save(output_path / fname, intervened_flag_hist)
+        fname = str(num_goals) + "_position_history.npy"
+        breakpoint()
+        np.save(output_path / fname, np.vstack(position_hist))
+        fname = str(num_goals) + "_episode_lengths.npy"
+        np.save(output_path / fname, np.array(episode_durations))
 
         # distribution for un-intervned states
-        corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==False]==True)
-        expert_policy_states = np.sum(corrupted_flag[intervened_flag==False]==False)
-        plt.pie([corrupt_policy_states, expert_policy_states], labels=["corrupt policy", "expert policy"])
-        plt.title("Unintervened States")
-        fig_name = str(num_goals) + "_goals_unintervened_pie.eps"
-        plt.savefig(output_path / fig_name)
-        plt.close()
+        #corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==False]==True)
+        #expert_policy_states = np.sum(corrupted_flag[intervened_flag==False]==False)
+        plt.bar([-0.25,0.75], [np.mean(unintervened_expert_policy_states), np.mean(intervened_expert_policy_states)], 
+                yerr=[np.std(unintervened_expert_policy_states)/np.sqrt(len(unintervened_expert_policy_states)), np.std(intervened_expert_policy_states)/np.sqrt(len(intervened_expert_policy_states))], width=0.5, capsize=5)
+        #plt.title("Unintervened States")
+        #fig_name = str(num_goals) + "_goals_unintervened_pie.eps"
+        #plt.savefig(output_path / fig_name)
+        #plt.close()
 
         # distribution for intervened states
-        corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==True]==True)
-        expert_policy_states = np.sum(corrupted_flag[intervened_flag==True]==False)
-        plt.pie([corrupt_policy_states, expert_policy_states], labels=["corrupt policy", "expert policy"])
+        #corrupt_policy_states = np.sum(corrupted_flag[intervened_flag==True]==True)
+        #expert_policy_states = np.sum(corrupted_flag[intervened_flag==True]==False)
+        plt.bar([0.25,1.25], [np.mean(unintervened_corrupt_policy_states), np.mean(intervened_corrupt_policy_states)], 
+                yerr=[np.std(unintervened_corrupt_policy_states)/np.sqrt(len(unintervened_corrupt_policy_states)), np.std(intervened_corrupt_policy_states)/np.sqrt(len(intervened_corrupt_policy_states))], width=0.5, capsize=5)
+        plt.xticks([0,1], ["unintervend states", "intervened states"])
         plt.title("Intervened States")
         fig_name = str(num_goals) + "_goals_intervened_pie.eps"
+        #plt.legend(["Unintervened States", "Intervened States"])
+        plt.savefig(output_path / fig_name)
+        fig_name = str(num_goals) + "_goals_intervened_pie.png"
+        #plt.legend(["Unintervened States", "Intervened States"])
         plt.savefig(output_path / fig_name)
         plt.close()
 

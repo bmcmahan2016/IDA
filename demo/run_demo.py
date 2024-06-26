@@ -52,12 +52,18 @@ def test_with_human(total_episodes=0,
     state_dim=9
     action_dim=2
     max_episode_len = 1000
-    recorded_states = np.zeros((total_episodes, max_episode_len, state_dim))
-    recorded_actions = np.zeros((total_episodes, max_episode_len, action_dim))
-    recorded_rewards = np.zeros((total_episodes, max_episode_len, 1))
+    recorded_states = []#np.zeros((total_episodes, max_episode_len, state_dim))
+    recorded_actions = []#np.zeros((total_episodes, max_episode_len, action_dim))
+    recorded_rewards = []#np.zeros((total_episodes, max_episode_len, 1))
+    recorded_intervention = []
 
     successes, crashes, timeouts = 0, 0, 0
     for episode_num in tqdm.tqdm(range(total_episodes+drop_first_episodes)):
+        state_trajectory = []
+        action_trajectory = []
+        reward_trajectory = []
+        intervention_trajectory = []
+
         observation, info = env.reset()
         image = env.render()
         clock.tick(1)  # pause for a second to let the user adjust
@@ -107,14 +113,20 @@ def test_with_human(total_episodes=0,
 
             ### compute the copilot advantage
             behavior_action, adv = advantage_fn.behavior_policy(state.numpy(), action, copilot_action) 
-            recorded_states[episode_num-drop_first_episodes, t_steps] = observation
-            recorded_actions[episode_num-drop_first_episodes, t_steps] = behavior_action
+            #recorded_states[episode_num-drop_first_episodes, t_steps] = observation
+            state_trajectory.append(observation)
+            #recorded_actions[episode_num-drop_first_episodes, t_steps] = behavior_action
+            action_trajectory.append(behavior_action)
+            if (behavior_action == copilot_action).all():
+                intervention_trajectory.append(1)
+            else:
+                intervention_trajectory.append(0)
 
             observation, reward, terminated, truncated, info = env.step(behavior_action)
             # will get over-written by itself on next loop iter if not terminal state
-            recorded_states[episode_num-drop_first_episodes, t_steps+1] = observation
+            #recorded_states[episode_num-drop_first_episodes, t_steps+1] = observation
             # reward at timesteps zero corresponds to s[0] and a[0]
-            recorded_rewards[episode_num-drop_first_episodes, t_steps] = reward
+            #recorded_rewards[episode_num-drop_first_episodes, t_steps] = reward
 
             total_return += reward
             t_steps += 1
@@ -150,13 +162,24 @@ def test_with_human(total_episodes=0,
         elif t_steps == 999:
             timeouts += 1
 
+        # add trajectories to records
+        recorded_intervention.append(np.array(intervention_trajectory))
+        recorded_actions.append(np.array(action_trajectory))
+        recorded_states.append(np.array(state_trajectory))
+
     results_file.write('successful episodes: ' + str(successes) + '\n')
     results_file.write('crashed episodes: ' + str(crashes) + '\n')
     results_file.write('timeout episodes: ' + str(timeouts) + '\n')
     results_file.write("\n")
     results_file.close()
 
+    recorded_states = np.array(recorded_states, dtype=object)
+    recorded_actions = np.array(recorded_actions, dtype=object)
+    recorded_rewards = np.array(recorded_rewards, dtype=object)
+    recorded_intervention = np.array(recorded_intervention, dtype=object)
+
     np.save(output_path / Path("states.npy"), recorded_states)
+    np.save(output_path / Path("intervention.npy"), recorded_intervention)
     np.save(output_path / Path("behavior_actions.npy"), recorded_actions,)
     np.save(output_path / Path("rewards.npy"), recorded_rewards, )
 
