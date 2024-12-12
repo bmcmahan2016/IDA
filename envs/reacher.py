@@ -18,7 +18,7 @@ class ReacherEnv(MujocoEnv, utils.EzPickle):
         "render_fps": 50,
     }
 
-    def __init__(self, continuous=False, N=0, **kwargs):
+    def __init__(self, continuous=False, N=0, X_min=-0.2, X_max=0.2, Y_min=-0.2, Y_max=0.2, **kwargs):
         utils.EzPickle.__init__(self, **kwargs)
         observation_space = Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32)
         MujocoEnv.__init__(
@@ -44,6 +44,8 @@ class ReacherEnv(MujocoEnv, utils.EzPickle):
         self.solved_reward = -50  # considered a success
         self.max_t_steps = 50
         self._N = N
+        self._lows = (X_min, Y_min)
+        self._highs = (Y_max, Y_max)
         if self._N > 0:
             self.initialize_goal_space()
 
@@ -52,7 +54,7 @@ class ReacherEnv(MujocoEnv, utils.EzPickle):
         for ix in range(self._N):
             # sample a goal and append it to the goal space
             while True:
-                goal = self.np_random.uniform(low=-0.2, high=0.2, size=2)
+                goal = self.np_random.uniform(low=self._lows, high=self._highs, size=2)
                 if np.linalg.norm(goal) < 0.2:
                     break
             goal_space.append(goal)
@@ -162,5 +164,37 @@ class ReacherEnv(MujocoEnv, utils.EzPickle):
                                   self.goal_space, 
                                   goal_agnostic_obs[:,4:6], 
                                   self.get_body_com("fingertip")[:2]-self.goal_space, 
+                                  goal_agnostic_obs[:,-1:]])
+        return observations
+
+    def insert_agnostic_goals(self, goal_agnostic_obs, N=1000):
+        """Inserts goals into goal agnostic observation
+
+        Args:
+            goal_agnostic_obs (numpy.array): a goal agnostic observation of the environment
+                with shape (7,)
+            possible_goals (numpy.array): an array of all possible goals to be considered with shape
+                (N, goal_dim) where N is the total number of goals to be considered and goal_dim
+                is the dimension of an individual goal (i.e. 2: an x and y position)
+
+        Returns:
+            observations (numpy.array): A matrix of observations containing all possible goals. Has 
+                shape (N, obs_dim)
+        """ 
+        GOAL_AGNOSTIC_OBS_DIM = 7
+        OBS_DIM = 11
+
+        # create a dummy goal space around the arm's fingertip by randomly sampling noise
+        agnostic_goal_space = self.get_body_com("fingertip")[:2] + 0.2*(np.random.rand(N,2)-0.5)
+        num_goals, goal_dim = agnostic_goal_space.shape
+        goal_agnostic_obs = goal_agnostic_obs.reshape(1,GOAL_AGNOSTIC_OBS_DIM)
+        goal_agnostic_obs = goal_agnostic_obs.repeat(num_goals, axis=0)
+
+
+
+        observations = np.hstack([goal_agnostic_obs[:,:4], 
+                                  agnostic_goal_space, 
+                                  goal_agnostic_obs[:,4:6], 
+                                  self.get_body_com("fingertip")[:2]-agnostic_goal_space, 
                                   goal_agnostic_obs[:,-1:]])
         return observations

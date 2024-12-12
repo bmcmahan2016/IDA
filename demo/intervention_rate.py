@@ -23,8 +23,8 @@ def scale_array_to_100_elements(arr):
 
 
 
-intervention = np.load('/home/necl/code/IDA/demo/experiments/lunar_lander/BM/A/block_0/intervention.npy', allow_pickle=True)
-states = np.load('/home/necl/code/IDA/demo/experiments/lunar_lander/BM/A/block_0/states.npy', allow_pickle=True)
+intervention = np.load('/home/necl/code/IDA/demo/experiments/lunar_lander/JN/C/block_2/intervention.npy', allow_pickle=True)
+states = np.load('/home/necl/code/IDA/demo/experiments/lunar_lander/JN/C/block_2/states.npy', allow_pickle=True)
 
 n_episodes = states.shape[0]
 intervention_p = np.zeros((n_episodes, 100))
@@ -36,6 +36,21 @@ plt.xlabel("Normalized Time in Episode")
 plt.ylabel("Intervention Probability")
 plt.ylim([-0.1, 1.2])
 plt.show()
+plt.close()
+
+# plot the intervention rate as a function of altitude
+
+intervention_altitudes = []
+for episode_ix in range(n_episodes):
+    intervention_altitudes.extend(states[episode_ix][np.where(intervention[episode_ix]==1)[0]][:,1])
+plt.hist(intervention_altitudes)
+plt.xlabel("Rocketship Altitude (M)")
+plt.ylabel("Frequency of Intervention")
+
+
+plt.show()    
+plt.savefig('Intervention_Altitude.pdf')
+plt.close()
 pos_hist = np.vstack(states)[:,:2]
 intervention_flag = np.hstack(intervention)
 
@@ -57,7 +72,8 @@ plt.ylabel('Y Position')
 
 # Show the plot
 plt.show()
-
+plt.savefig("Heatmap.pdf")
+plt.close()
 ######
 # pos_hist = np.load("/home/necl/code/IDA/eval/experiments/surrogate_pilots/lunarlander/lunarlander/noise/IDA/2024-06-04 13:44:15.239024/9_position_history.npy")
 # intervention_flag = np.load("/home/necl/code/IDA/eval/experiments/surrogate_pilots/lunarlander/lunarlander/noise/IDA/2024-06-04 13:44:15.239024/9_goals_intervened_flag.npy")

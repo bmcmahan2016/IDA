@@ -9,12 +9,13 @@ import torch
 import numpy as np
 
 class InterventionFunction(object):
-    def __init__(self, Q_intervention, env, num_goals=1, discount=0.0, margin=0.99, disable=False):
+    def __init__(self, Q_intervention, env, num_goals=1, discount=0.0, margin=0.99, disable=False, goal_agnostic=False):
         MAXIMUM_SEQ_LENGTH = 1000
         self._NUM_GOALS = num_goals
         self._OBS_DIM = env.env.observation_space.high.shape[0]
         self._ACTION_DIM = env.env.action_space.low.shape[0]
         self._disable=disable  # turns off intervention
+        self._goal_agnostic = goal_agnostic
 
         # create tensors and place them on GPU
         self._margin = margin
@@ -37,7 +38,10 @@ class InterventionFunction(object):
     def behavior_policy(self, goal_agnostic_obs, pilot_action, copilot_action):
         if self._disable:
             return copilot_action, 0
-        self._observation_batch[self._ix] = torch.tensor(self._env.env.insert_goals(goal_agnostic_obs))
+        if self._goal_agnostic:
+            self._observation_batch[self._ix] = torch.tensor(self._env.env.insert_agnostic_goals(goal_agnostic_obs))
+        else:
+            self._observation_batch[self._ix] = torch.tensor(self._env.env.insert_goals(goal_agnostic_obs))
         pilot_intervention_score = self.compute_intervention(goal_agnostic_obs, pilot_action)
         copilot_intervention_score = self.compute_intervention(goal_agnostic_obs, copilot_action)
         copilot_advantage = torch.sum(torch.sign(copilot_intervention_score-pilot_intervention_score)) / len(copilot_intervention_score)

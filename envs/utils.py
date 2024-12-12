@@ -4,7 +4,7 @@ from envs.lunar_lander import LunarLander
 from envs.reacher import ReacherEnv
 import numpy as np
 
-def make_env(name, render_mode=None, N=0, exploring_starts=False):
+def make_env(name, render_mode=None, N=0, exploring_starts=False, Y_min=-0.2, Y_max=0.2, X_min=-0.2, X_max=0.2):
     if name.lower()=="cartpole":
         env = gym.make('CartPole-v1', render_mode=render_mode)
         return gymnasium.wrappers.TimeLimit(ContinuousCartPole(env), max_episode_steps=500)
@@ -29,7 +29,16 @@ def make_env(name, render_mode=None, N=0, exploring_starts=False):
         env = ReacherEnv(render_mode=render_mode)
         return gymnasium.wrappers.TimeLimit(env, max_episode_steps=50)
     if name.lower() == "reacher_continuous":
+        env = ReacherEnv(continuous=True, render_mode=render_mode, N=N, X_min=X_min, X_max=X_max, Y_min=Y_min, Y_max=Y_max)
+        return gymnasium.wrappers.TimeLimit(env, max_episode_steps=50)
+    if name.lower() == "reacher_discrete":
         env = ReacherEnv(continuous=True, render_mode=render_mode, N=N)
+        return gymnasium.wrappers.TimeLimit(env, max_episode_steps=50)
+    if name.lower() == "reacher_linear":
+        env = ReacherEnv(continuous=True, render_mode=render_mode, N=N, Y_max=Y_max, Y_min=Y_min)
+        return gymnasium.wrappers.TimeLimit(env, max_episode_steps=50)
+    if name.lower() == "reacher_subspace":
+        env = ReacherEnv(continuous=True, render_mode=render_mode, N=N, X_min=X_min, Y_min=Y_min, X_max=X_max, Y_max=Y_max)
         return gymnasium.wrappers.TimeLimit(env, max_episode_steps=50)
 
 # creates environment

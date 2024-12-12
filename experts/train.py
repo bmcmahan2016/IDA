@@ -88,6 +88,11 @@ if __name__ == "__main__":
     )
 
     parser.add_argument('-env', '--environment', default='lunarlander')
+    parser.add_argument('-N', default=0, type=int)
+    parser.add_argument('-xmin', default=-0.2, type=float)
+    parser.add_argument('-xmax', default=0.2, type=float)
+    parser.add_argument('-ymin', default=-0.2, type=float)
+    parser.add_argument('-ymax', default=0.2, type=float)
     parser.add_argument('-agent', '--agent_type', default='sac')
     parser.add_argument('-out', '--output_dir')
     parser.add_argument('-collect_rollouts', action='store_true')
@@ -99,7 +104,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # initialize environment
-    env = make_env(args.environment, exploring_starts=True)
+    env = make_env(args.environment, exploring_starts=True, N=args.N, X_max=args.xmax, Y_min=args.ymin, X_min=args.xmin, Y_max=args.ymax)
 
     # creates expert agent
     if args.agent_type=='sac':
