@@ -1,6 +1,6 @@
 # Introduction
 
-![IDA Overview](IDA_high_level.png )
+![IDA Overview](imgs/IDA_high_level.png )
 
 
 Interventional Assist (IA) provides a hyper-parameter free framework for shared autonomy (SA). 
